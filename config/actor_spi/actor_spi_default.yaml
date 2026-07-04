@@ -10,12 +10,12 @@ checkpoint_bundle_root: docs/env_best_runs_choi/checkpoints
 init_actor: true
 use_spi_subgoal_pipeline: true
 
-actor_spi_steps: 100000
+actor_spi_steps: 50000
 actor_spi_lr: 0.0003
 spi_tau: 1.0
 actor_spi_batch_size: 0
 
-# Eval and save at 50K and 100K by default.
+# Eval and save at the 50K default finetuning horizon.
 eval_interval: 50000
 save_interval: 50000
 actor_spi_eval_episodes: 25
