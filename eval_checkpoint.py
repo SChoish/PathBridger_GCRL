@@ -111,8 +111,7 @@ def main() -> None:
         '--idm_only',
         action='store_true',
         help='Evaluate only the IDM policy (flow subgoal + inverse dynamics); skip loading and '
-        'rolling out the SPI actor. Use for runs trained with --train_actor_spi=false, where the '
-        'actor is fine-tuned separately.',
+        'rolling out the SPI actor. Use before the 50K train_actor_spi.py finetuning stage.',
     )
     args = p.parse_args()
 

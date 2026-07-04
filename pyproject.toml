@@ -1,7 +1,7 @@
 [project]
 name = "pathbridger"
 version = "0.1.0"
-description = "Flow subgoal + forward-bridge residual dynamics + TRL critic + SPI actor for offline goal-conditioned RL on OGBench."
+description = "Minimal production runtime for PathBridger offline goal-conditioned RL checkpoints."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -11,14 +11,13 @@ dependencies = [
     "flax >= 0.8.4",
     "ml_collections",
     "pyyaml",
-    "matplotlib",
-    "imageio-ffmpeg",
-    "moviepy",
-    "wandb",
     "absl-py",
     "tqdm",
-    "pillow",
 ]
+
+[project.optional-dependencies]
+experiment = ["wandb"]
+visualization = ["matplotlib", "imageio-ffmpeg", "moviepy", "pillow"]
 
 [tool.ruff]
 line-length = 120
