@@ -271,9 +271,6 @@ def _apply_yaml_to_flags(data: dict) -> tuple[dict, dict, dict]:
 
     # Allow forward-bridge planner knobs at the top level for ergonomic YAML
     # (route them into dynamics_updates so the dynamics-agent config picks them up).
-    if 'planner_type' in data:
-        dynamics_updates = dynamics_updates or {}
-        dynamics_updates.setdefault('planner_type', data.pop('planner_type'))
     if 'forward_bridge' in data:
         dynamics_updates = dynamics_updates or {}
         dynamics_updates.setdefault('forward_bridge', data.pop('forward_bridge'))
@@ -445,9 +442,6 @@ def _env_max_episode_steps(env: Any) -> int:
 
 def _resolve_max_goal_steps_from_env(config: Any, env: Any) -> bool:
     """Resolve ``max_goal_steps: env`` in-place. Return True when resolved."""
-    if bool(config.get('max_goal_steps_from_env', False)):
-        config['max_goal_steps'] = _env_max_episode_steps(env)
-        return True
     value = config.get('max_goal_steps', None)
     if isinstance(value, str) and value.lower() in ('env', 'env_max_episode_steps', 'max_episode_steps'):
         with config.ignore_type():
@@ -805,7 +799,6 @@ def _build_spi_actor_batch_from_dynamics(
     plan_n = max(1, int(1 if plan_candidates is None else plan_candidates))
     noise_scale = 0.0
     num_subgoals = max(1, int(spi_num_subgoal_samples))
-    include_zero = bool(dynamics_agent.config.get('subgoal_eval_include_zero_candidate', True))
     score_mode = str(dynamics_agent.config.get('subgoal_eval_score_mode', 'product')).lower()
 
     sub_rng, plan_rng = jax.random.split(dynamics_agent.rng)
@@ -814,7 +807,7 @@ def _build_spi_actor_batch_from_dynamics(
         high_goals,
         sub_rng,
         num_candidates=num_subgoals,
-        include_mean=include_zero,
+        include_mean=False,
         temperature_override=float(spi_subgoal_temperature),
     )
     subgoal_scores = critic_agent.score_transitive_subgoals(
@@ -1137,9 +1130,8 @@ def _evaluate_env_tasks(
     if num_eval < 1:
         raise ValueError('episodes_per_task (stat eval) must be >= 1')
 
-    eval_selection = str(dynamics_agent.config.get('subgoal_eval_selection', 'zero_noise')).lower()
-    # 'sample' and 'best_of_n_goal_l2' do not need a critic; 'best_of_n_value' does.
-    use_eval_bon = eval_selection in ('best_of_n_value', 'best_of_n_goal_l2', 'sample')
+    # Eval selection is fixed to best_of_n_value (critic-scored best-of-N).
+    use_eval_bon = True
     eval_seed_base = int(dynamics_agent.config.get('subgoal_eval_seed', 0))
     if idm_only:
         variants = [('flow', 'idm', 'eval_flow_idm')]
@@ -1424,22 +1416,14 @@ def main(_):
         train_actor_spi,
     )
     run_logger.info(
-        'dynamics planner=%s model=%s theta_schedule=%s theta_total=%.4g progress_alpha=%.4g bridge_gamma_inv=%.4g lambda=%.4g beta_min=%.4g beta_max=%.4g',
-        str(dynamics_config.get('planner_type', '')),
-        str(dynamics_config.get('dynamics_model_type', '')),
-        str(dynamics_config.get('theta_schedule', '')),
-        float(dynamics_config.get('theta_total', 0.0)),
-        float(dynamics_config.get('progress_alpha', 0.0)),
+        'dynamics planner=forward_bridge_residual theta_schedule=prefix_progress theta_total=1 progress_alpha=0.8 bridge_gamma_inv=%.4g lambda=%.4g',
         float(dynamics_config.get('bridge_gamma_inv', 0.0)),
         float(dynamics_config.get('dynamics_lambda', 0.0)),
-        float(dynamics_config.get('dynamics_beta_min', 0.0)),
-        float(dynamics_config.get('dynamics_beta_max', 0.0)),
     )
     run_logger.info(
-        'subgoal distribution=%s stochastic_loss=%s target_mode=%s steps=%d samples_U=%d plan_candidates_N=%d total_proposals=%d temperature=%.4g value_style=%s value_expectile=%.4g value_gap_scale=%.4g value_weight_max=%.4g use_mean_for_actor_goal=%s',
+        'subgoal distribution=%s stochastic_loss=%s target_mode=displacement steps=%d samples_U=%d plan_candidates_N=%d total_proposals=%d temperature=%.4g value_style=%s value_expectile=%.4g value_gap_scale=%.4g value_weight_max=%.4g use_mean_for_actor_goal=%s',
         str(dynamics_config.get('subgoal_distribution', '')),
         str(dynamics_config.get('subgoal_stochastic_loss', 'mse')),
-        str(dynamics_config.get('subgoal_target_mode', 'absolute')),
         int(dynamics_config.get('subgoal_steps', 0)),
         int(dynamics_config.get('subgoal_num_samples', 1)),
         1,
@@ -1452,11 +1436,9 @@ def main(_):
         bool(dynamics_config.get('subgoal_use_mean_for_actor_goal', True)),
     )
     run_logger.info(
-        'subgoal_flow eval_selection=%s eval_num_samples=%d final_eval_n_values=%s eval_include_zero_candidate=%s',
-        str(dynamics_config.get('subgoal_eval_selection', 'zero_noise')),
+        'subgoal_flow eval_selection=best_of_n_value eval_num_samples=%d final_eval_n_values=%s eval_include_zero_candidate=False',
         int(dynamics_config.get('subgoal_eval_num_samples', 1)),
         str(final_eval_n_values) if final_eval_n_values else 'off',
-        bool(dynamics_config.get('subgoal_eval_include_zero_candidate', True)),
     )
     run_logger.info(
         'planner_sampling forward_bridge_mode=%s forward_bridge_use_path_loss=%s path_loss_weight=%.4g rollout_horizon=%d rollout_loss_weight=%.4g',

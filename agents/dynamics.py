@@ -24,23 +24,10 @@ from utils.dynamics import (
     make_dynamics_schedule,
 )
 from utils.goal_representation import assert_phi_goal_obs_indices, goal_representation, normalize_phi_goal_obs_indices
-from utils.inverse_dynamics import InverseDynamicsMLP, parse_hidden_dims
 from utils.networks import MLP
 
 
-_VALID_PLANNER_TYPES = ('forward_bridge_residual',)
 _VALID_FORWARD_BRIDGE_MODES = ('mean', 'sample')
-_VALID_DYNAMICS_MODEL_TYPES = ('exact_residual',)
-
-
-def _planner_type(config) -> str:
-    """Return the canonical planner_type string from the agent config."""
-    pt = str(config.get('planner_type', 'forward_bridge_residual')).lower()
-    if pt not in _VALID_PLANNER_TYPES:
-        raise ValueError(
-            f'planner_type must be one of {_VALID_PLANNER_TYPES}, got {pt!r}.'
-        )
-    return pt
 
 
 def _forward_bridge_mode(config) -> str:
@@ -52,23 +39,28 @@ def _forward_bridge_mode(config) -> str:
     return mode
 
 
-def _dynamics_model_type(config) -> str:
-    """Return the canonical dynamics_model_type string from the agent config.
-
-    ``exact_residual`` uses the exact bridge posterior mean as the base transition
-      with a learned data residual; trained via path/rollout consistency.
-    """
-    mode = str(config.get('dynamics_model_type', 'exact_residual')).lower()
-    if mode not in _VALID_DYNAMICS_MODEL_TYPES:
-        raise ValueError(
-            f'dynamics_model_type must be one of {_VALID_DYNAMICS_MODEL_TYPES}, got {mode!r}.'
-        )
-    return mode
+def parse_hidden_dims(hidden_dims: str | tuple[int, ...]) -> tuple[int, ...]:
+    """Parse ``"512,512,512"`` (or a tuple) into a tuple of ints."""
+    if isinstance(hidden_dims, str):
+        return tuple(int(x.strip()) for x in hidden_dims.split(',') if x.strip())
+    return tuple(hidden_dims)
 
 
-def _dynamics_model_type_metric(config) -> float:
-    _dynamics_model_type(config)
-    return 1.0
+class InverseDynamicsMLP(nn.Module):
+    """Predict ``a_t`` from concatenated ``(s_t, s_{t+1})``."""
+
+    obs_dim: int
+    action_dim: int
+    hidden_dims: tuple[int, ...]
+
+    @nn.compact
+    def __call__(self, obs: jnp.ndarray, next_obs: jnp.ndarray) -> jnp.ndarray:
+        x = jnp.concatenate([obs, next_obs], axis=-1)
+        return MLP(
+            hidden_dims=(*self.hidden_dims, self.action_dim),
+            activate_final=False,
+            layer_norm=True,
+        )(x)
 
 
 class PathResidualNet(nn.Module):
@@ -209,44 +201,16 @@ def _subgoal_stochastic_loss(config) -> str:
     return str(config.get('subgoal_stochastic_loss', 'mse')).lower()
 
 
-def _subgoal_target_mode(config) -> str:
-    """Target representation for the subgoal estimator and the bridge.
-
-    - ``'absolute'`` (default, legacy): subgoal_net predicts the absolute
-      next-K state ``s_{t+K}``; the bridge interpolates between ``s_t`` and
-      ``s_{t+K}`` in absolute state space.
-    - ``'displacement'``: subgoal_net predicts the displacement
-      ``Delta = s_{t+K} - s_t`` (matching the prior that endpoints should be
-      *small offsets* from the current state).  External APIs still hand off
-      absolute states / trajectories; the displacement frame only exists
-      inside :class:`DynamicsAgent`.
-    """
-    mode = str(config.get('subgoal_target_mode', 'absolute')).lower()
-    if mode not in ('absolute', 'displacement'):
-        raise ValueError(
-            "subgoal_target_mode must be 'absolute' or 'displacement', "
-            f'got {mode!r}.'
-        )
-    return mode
-
-
-def _is_displacement_mode(config) -> bool:
-    return _subgoal_target_mode(config) == 'displacement'
-
-def _residual_target_mode(config) -> str:
-    """Target representation for residual/bridge inputs (independent of subgoal mode)."""
-    mode = str(config.get('residual_target_mode', 'absolute')).lower()
-    if mode not in ('absolute', 'displacement'):
-        raise ValueError(
-            "residual_target_mode must be 'absolute' or 'displacement', "
-            f'got {mode!r}.'
-        )
-    return mode
-
-
 def _subgoal_target_mode_id(config) -> float:
-    """Scalar id for CSV/W&B logging. 0 = absolute, 1 = displacement."""
-    return 1.0 if _is_displacement_mode(config) else 0.0
+    """Scalar id for CSV/W&B logging. Fixed to 1.0 (displacement frame).
+
+    The subgoal estimator and the residual/bridge chain always operate in the
+    displacement frame: subgoal_net predicts ``Delta = s_{t+K} - s_t`` and the
+    bridge / residual chain is trained with ``x_0 = 0``, ``x_K = Delta``.
+    External APIs still hand off absolute states / trajectories.
+    """
+    del config
+    return 1.0
 
 
 class _DynamicsAgentCore(flax.struct.PyTreeNode):
@@ -265,12 +229,6 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
     # the local frame ``s' = s - s_t`` so that ``x_0 = 0`` and ``x_K = Delta``.
     # External APIs (``plan``, ``predict_subgoal``, etc.) still expose absolute
     # states; the helpers below centralise the affine shift.
-
-    def _is_displacement_mode(self) -> bool:
-        return _is_displacement_mode(self.config)
-
-    def _is_residual_displacement_mode(self) -> bool:
-        return _residual_target_mode(self.config) == 'displacement'
 
     # State normalization was removed: the agent always operates directly on
     # environment-scale states, so these helpers are identity passthroughs.
@@ -293,48 +251,31 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
         return jnp.asarray(x, dtype=jnp.float32)
 
     def _displacement_origin(self, current_state: jnp.ndarray) -> jnp.ndarray:
-        """Origin to subtract for the displacement frame.
-
-        Returns ``current_state`` when ``residual_target_mode='displacement'``
-        and a zero tensor otherwise (so callers can unconditionally subtract).
-        """
-        if self._is_residual_displacement_mode():
-            return jnp.asarray(current_state, dtype=jnp.float32)
-        return jnp.zeros_like(jnp.asarray(current_state, dtype=jnp.float32))
+        """Origin to subtract for the (always-on) displacement frame: ``s_t``."""
+        return jnp.asarray(current_state, dtype=jnp.float32)
 
     def _bridge_anchor(self, current_state_abs: jnp.ndarray) -> jnp.ndarray:
         """Absolute ``s_t`` passed to :class:`PathResidualNet` as ``s_1``."""
         return jnp.asarray(current_state_abs, dtype=jnp.float32)
 
     def _subgoal_abs_from_raw(self, observations: jnp.ndarray, raw: jnp.ndarray) -> jnp.ndarray:
-        """Map raw ``subgoal_net`` output to an absolute next-K state.
-
-        ``raw`` is interpreted as a normalized/raw-frame ``Delta`` in
-        displacement mode and as a normalized/raw-frame absolute state in
-        absolute mode.
-        """
-        if self._is_displacement_mode():
-            raw_delta = self._denormalize_delta_state(raw)
-            return jnp.asarray(observations, dtype=raw_delta.dtype) + raw_delta
-        return self._denormalize_abs_state(raw)
+        """Map raw ``subgoal_net`` output (a ``Delta``) to an absolute next-K state."""
+        raw_delta = self._denormalize_delta_state(raw)
+        return jnp.asarray(observations, dtype=raw_delta.dtype) + raw_delta
 
     def _subgoal_candidates_abs_from_raw(self, observations: jnp.ndarray, raw: jnp.ndarray) -> jnp.ndarray:
         """Map raw subgoal candidates ``[B, N, D]`` to absolute env-scale endpoints."""
-        if self._is_displacement_mode():
-            return (
-                jnp.asarray(observations, dtype=jnp.float32)[:, None, :]
-                + self._denormalize_delta_state(raw)
-            )
-        return self._denormalize_abs_state(raw)
+        return (
+            jnp.asarray(observations, dtype=jnp.float32)[:, None, :]
+            + self._denormalize_delta_state(raw)
+        )
 
     def _subgoal_target_for_loss(
         self, observations: jnp.ndarray, target_abs: jnp.ndarray,
     ) -> jnp.ndarray:
-        """Convert the absolute ``high_actor_targets`` into the subgoal-net's loss frame."""
-        if self._is_displacement_mode():
-            delta = jnp.asarray(target_abs, dtype=jnp.float32) - jnp.asarray(observations, dtype=jnp.float32)
-            return self._normalize_delta_state(delta)
-        return self._normalize_abs_state(target_abs)
+        """Convert the absolute ``high_actor_targets`` into the subgoal-net's loss frame (Delta)."""
+        delta = jnp.asarray(target_abs, dtype=jnp.float32) - jnp.asarray(observations, dtype=jnp.float32)
+        return self._normalize_delta_state(delta)
 
     def _idm_loss_term(self, batch, grad_params):
         idm_w = float(self.config.get('idm_loss_weight', 1.0))
@@ -397,13 +338,10 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
         )
         return forward_bridge_coefficients(
             int(K),
-            beta_min=float(self.config['dynamics_beta_min']),
-            beta_max=float(self.config['dynamics_beta_max']),
             lambda_=float(self.config['dynamics_lambda']),
             bridge_gamma_inv=gamma_inv,
-            theta_schedule=str(self.config.get('theta_schedule', 'linear_beta')),
-            theta_total=float(self.config.get('theta_total', 1.0)),
-            progress_alpha=float(self.config.get('progress_alpha', 0.8)),
+            theta_total=1.0,
+            progress_alpha=0.8,
         )
 
     def forward_bridge_plan(
@@ -494,15 +432,11 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
         w = idx * (float(K) - idx) / float(K * K)
 
         if anchor is None:
-            if self._is_residual_displacement_mode():
-                raise ValueError(
-                    'forward_bridge_residual_plan in displacement mode requires '
-                    'anchor=s_t (the absolute current state).  Use plan() / '
-                    'sample_plan() unless this is an intentional low-level call.'
-                )
-            # Absolute mode: ``z0`` already equals the current state ``s_t``,
-            # so it is the natural anchor fallback.
-            anchor = z0
+            raise ValueError(
+                'forward_bridge_residual_plan requires anchor=s_t (the absolute '
+                'current state).  Use plan() / sample_plan() unless this is an '
+                'intentional low-level call.'
+            )
         t_norm = jnp.broadcast_to(idx[None, :] / float(K), (z0.shape[0], K + 1))
         anchor_n = self._normalize_abs_state(anchor)
         residual = self.network.select('path_residual_net')(
@@ -528,7 +462,6 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
         zK: jnp.ndarray,
         indices: jnp.ndarray,
         *,
-        planner: str,
         params=None,
         anchor=None,
     ) -> jnp.ndarray:
@@ -541,11 +474,9 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
         zK_n = self._normalize_planner_state(zK)
         mu = a[idx][None, :, None] * z0_n[:, None, :] + b[idx][None, :, None] * zK_n[:, None, :]
         if anchor is None:
-            if self._is_residual_displacement_mode():
-                raise ValueError(
-                    '_forward_bridge_path_at_indices in displacement mode requires anchor=s_t.'
-                )
-            anchor = z0
+            raise ValueError(
+                '_forward_bridge_path_at_indices requires anchor=s_t.'
+            )
         t_norm = jnp.broadcast_to(idx_f[None, :] / float(N), (z0.shape[0], idx.shape[0]))
         anchor_n = self._normalize_abs_state(anchor)
         residual = self.network.select('path_residual_net')(
@@ -771,21 +702,13 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
     ):
         """Eval-time subgoal endpoint selection.
 
-        Supported ``subgoal_eval_selection`` modes:
-
-        - ``'zero'`` / ``'zero_noise'`` / ``'mean'`` / ``'deterministic'``:
-          zero-noise flow endpoint (backward-compatible pseudo-mean).
-        - ``'sample'``: a single random flow endpoint (no scoring).
-        - ``'best_of_n_value'``: best of ``subgoal_eval_num_samples`` endpoints
-          under the critic transitive-value score. Requires ``critic_agent``.
-        - ``'best_of_n_goal_l2'``: best of N endpoints under negative L2 distance
-          to ``high_actor_goals`` (no critic needed).
+        Fixed to ``best_of_n_value``: for stochastic subgoals, draw
+        ``subgoal_eval_num_samples`` flow endpoints and pick the one with the
+        best critic transitive-value score. Deterministic subgoals return the
+        single predicted endpoint.
         """
-        selection = str(self.config.get('subgoal_eval_selection', 'zero_noise')).lower()
         sub_mode = _subgoal_base_mode(self.config)
         if sub_mode == 'deterministic':
-            return self.predict_subgoal(observations, high_actor_goals)
-        if selection in ('zero', 'zero_noise', 'mean', 'deterministic'):
             return self.predict_subgoal(observations, high_actor_goals)
 
         squeeze = observations.ndim == 1
@@ -796,50 +719,26 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
             rng = jax.random.PRNGKey(int(self.config.get('subgoal_eval_seed', 0)))
         score_mode = str(self.config.get('subgoal_eval_score_mode', 'ratio')).lower()
 
-        if selection == 'sample':
-            candidates, _ = self.sample_subgoal_candidates(
-                observations,
-                high_actor_goals,
-                rng,
-                num_candidates=1,
-                include_mean=False,
-            )
-            best = candidates[:, 0, :]
-            if squeeze:
-                best = best[0]
-            return best
-
         num_samples = max(1, int(self.config.get('subgoal_eval_num_samples', 4)))
-        include_zero = bool(self.config.get('subgoal_eval_include_zero_candidate', True))
         candidates, _ = self.sample_subgoal_candidates(
             observations,
             high_actor_goals,
             rng,
             num_candidates=num_samples,
-            include_mean=include_zero,
+            include_mean=False,
         )
-        if selection == 'best_of_n_goal_l2':
-            scores = -jnp.mean(
-                (candidates - high_actor_goals[:, None, :]) ** 2, axis=-1
+        if critic_agent is None:
+            raise RuntimeError(
+                "infer_subgoal_for_eval requires a critic agent providing value "
+                'params (score_transitive_subgoals).'
             )
-        elif selection == 'best_of_n_value':
-            if critic_agent is None:
-                raise RuntimeError(
-                    "subgoal_eval_selection='best_of_n_value' requires a critic "
-                    'agent providing value params (score_transitive_subgoals).'
-                )
-            scores = critic_agent.score_transitive_subgoals(
-                observations,
-                candidates,
-                high_actor_goals,
-                network_params=critic_agent.network.params,
-                score_mode=score_mode,
-            )
-        else:
-            return self.predict_subgoal(
-                observations[0] if squeeze else observations,
-                high_actor_goals[0] if squeeze else high_actor_goals,
-            )
+        scores = critic_agent.score_transitive_subgoals(
+            observations,
+            candidates,
+            high_actor_goals,
+            network_params=critic_agent.network.params,
+            score_mode=score_mode,
+        )
         best_idx = jnp.argmax(scores, axis=1)
         best = jnp.take_along_axis(
             candidates,
@@ -1097,7 +996,7 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
                     origin, z0, zK, anchor = self._shift_to_displacement_frame(obs, mu)
                     indices = jnp.arange(0, proposal_horizon + 1, dtype=jnp.int32)
                     traj_local = self._forward_bridge_path_at_indices(
-                        z0, zK, indices, planner=_planner_type(self.config), anchor=anchor,
+                        z0, zK, indices, anchor=anchor,
                     )
                     sampled = {'trajectory': traj_local + origin[:, None, :]}
                 else:
@@ -1160,7 +1059,7 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
                 origin, z0, zK, anchor = self._shift_to_displacement_frame(obs, mu)
                 indices = jnp.arange(0, proposal_horizon + 1, dtype=jnp.int32)
                 traj_local = self._forward_bridge_path_at_indices(
-                    z0, zK, indices, planner=_planner_type(self.config), anchor=anchor,
+                    z0, zK, indices, anchor=anchor,
                 )
                 sampled = {'trajectory': traj_local + origin[:, None, :]}
             else:
@@ -1213,7 +1112,7 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
         action_dim = int(ex_actions.shape[-1])
         phi_idxs = normalize_phi_goal_obs_indices(config.get('phi_goal_obs_indices', ()))
         env_name_for_phi = str(config.get('env_name', ''))
-        sg_rep = str(config.get('subgoal_goal_representation', config.get('goal_representation', 'full'))).lower()
+        sg_rep = 'phi'
         assert_phi_goal_obs_indices(
             int(state_dim),
             sg_rep,
@@ -1237,13 +1136,10 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
 
         schedule = make_dynamics_schedule(
             N=config['dynamics_N'],
-            beta_min=config['dynamics_beta_min'],
-            beta_max=config['dynamics_beta_max'],
             lambda_=config['dynamics_lambda'],
             bridge_gamma_inv=float(config.get('bridge_gamma_inv', 0.0)),
-            theta_schedule=str(config.get('theta_schedule', 'linear_beta')),
-            theta_total=float(config.get('theta_total', 1.0)),
-            progress_alpha=float(config.get('progress_alpha', 0.8)),
+            theta_total=1.0,
+            progress_alpha=0.8,
         )
 
         sub_mode = _subgoal_base_mode(config)
@@ -1257,9 +1153,7 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
                 hidden_dims=tuple(config['subgoal_hidden_dims']),
                 state_dim=state_dim,
                 layer_norm=config['layer_norm'],
-                goal_representation=str(
-                    config.get('subgoal_goal_representation', config.get('goal_representation', 'full')),
-                ),
+                goal_representation='phi',
                 phi_goal_obs_indices=phi_idxs,
                 env_name=env_name_for_phi,
             )
@@ -1270,9 +1164,7 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
                 layer_norm=config['layer_norm'],
                 log_std_min=float(config.get('subgoal_log_std_min', -5.0)),
                 log_std_max=float(config.get('subgoal_log_std_max', 1.0)),
-                goal_representation=str(
-                    config.get('subgoal_goal_representation', config.get('goal_representation', 'full')),
-                ),
+                goal_representation='phi',
                 phi_goal_obs_indices=phi_idxs,
                 env_name=env_name_for_phi,
             )
@@ -1281,9 +1173,7 @@ class _DynamicsAgentCore(flax.struct.PyTreeNode):
                 hidden_dims=tuple(config['subgoal_hidden_dims']),
                 state_dim=state_dim,
                 layer_norm=config['layer_norm'],
-                goal_representation=str(
-                    config.get('subgoal_goal_representation', config.get('goal_representation', 'full')),
-                ),
+                goal_representation='phi',
                 phi_goal_obs_indices=phi_idxs,
                 env_name=env_name_for_phi,
             )
@@ -1695,7 +1585,7 @@ class DynamicsAgent(_DynamicsAgentCore):
                 'and dynamics_N.'
             )
 
-    def _total_loss_forward_bridge(self, batch, grad_params, rng, critic_value_params, planner: str):
+    def _total_loss_forward_bridge(self, batch, grad_params, rng, critic_value_params):
         """Forward-bridge-residual path-supervised loss.
 
         Trains the endpoint-preserving residual on top of the closed-form
@@ -1732,19 +1622,14 @@ class DynamicsAgent(_DynamicsAgentCore):
             prefix_idx = jnp.arange(0, H + 1, dtype=jnp.int32)
             indices = jnp.concatenate([prefix_idx, jnp.asarray([N], dtype=jnp.int32)], axis=0)
             path_pred = self._forward_bridge_path_at_indices(
-                z0, zK, indices, planner=planner, params=grad_params, anchor=anchor,
+                z0, zK, indices, params=grad_params, anchor=anchor,
             )
             segment_path = segment[:, indices, :]
         else:
-            if planner == 'forward_bridge_residual':
-                path_pred = self.forward_bridge_residual_plan(
-                    z0, zK, sample=False, noise_scale=0.0, num_steps=N,
-                    params=grad_params, anchor=anchor,
-                )
-            else:
-                path_pred = self.forward_bridge_plan(
-                    z0, zK, sample=False, noise_scale=0.0, num_steps=N,
-                )
+            path_pred = self.forward_bridge_residual_plan(
+                z0, zK, sample=False, noise_scale=0.0, num_steps=N,
+                params=grad_params, anchor=anchor,
+            )
             segment_path = segment
 
         path_loss_normalized = bool(self.config.get('path_loss_normalized', True))
@@ -1818,7 +1703,7 @@ class DynamicsAgent(_DynamicsAgentCore):
         d_xy_fb = path_pred[:, 1, :][:, idx_xy] - s1[:, idx_xy]
         first_step_xy_l2_fb = jnp.sqrt(jnp.mean(d_xy_fb ** 2))
 
-        planner_id = 1.0 if planner == 'forward_bridge' else 2.0
+        planner_id = 2.0  # fixed: forward_bridge_residual planner.
         fb_diag = {
             'forward_bridge/loss_path_interior': loss_fb_interior,
             'forward_bridge/loss_path_next': loss_fb_next,
@@ -1868,9 +1753,6 @@ class DynamicsAgent(_DynamicsAgentCore):
             'phase1/xN_minus_1_norm': jnp.linalg.norm(path_pred[:, 1, :], axis=-1).mean(),
             'phase1/bridge_step_mean': n.astype(jnp.float32).mean(),
             'phase1/planner_type': jnp.asarray(planner_id, dtype=jnp.float32),
-            'dynamics/model_type': jnp.asarray(
-                _dynamics_model_type_metric(self.config), dtype=jnp.float32,
-            ),
             **fb_diag,
         }
         # Split prediction / target norms by frame (raw vs absolute).
@@ -1904,34 +1786,26 @@ class DynamicsAgent(_DynamicsAgentCore):
         return loss, info
 
     def _theta_schedule_info(self) -> dict:
-        """Common theta-schedule diagnostics shared by every loss path.
+        """Common prefix-progress schedule diagnostics shared by every loss path.
 
-        Always logs the schedule id, ``theta_total``, ``progress_alpha`` and
-        the *actual* hard-bridge marginal weight at step
-        ``min(5, dynamics_N)``. The prefix-progress *target* curve is only
-        defined for the ``prefix_progress`` schedule; logging it under
-        ``linear_beta`` would emit ``NaN``, so we omit that key outside
-        prefix-progress mode.
+        Logs ``theta_total``, ``progress_alpha``, the *actual* hard-bridge
+        marginal weight at step ``min(5, dynamics_N)`` and the prefix-progress
+        *target* curve at the same step.
         """
         sched = self.schedule
         prefix_idx = min(5, int(self.config['dynamics_N']))
-        info = {
-            'dynamics/theta_schedule_id': sched['theta_schedule_id'],
+        return {
             'dynamics/theta_total': sched['theta_total'],
             'dynamics/progress_alpha': sched['progress_alpha'],
             'dynamics/prefix_progress_actual_5': sched['dynamics_beta_fwd'][prefix_idx],
+            'dynamics/prefix_progress_target_5': sched['progress_target_fwd'][prefix_idx],
         }
-        # Schedule-id 1.0 == prefix_progress; use a static config check (not the
-        # jax array) so the dict layout is fixed across jit traces.
-        if str(self.config.get('theta_schedule', 'linear_beta')).lower() == 'prefix_progress':
-            info['dynamics/prefix_progress_target_5'] = sched['progress_target_fwd'][prefix_idx]
-        return info
 
     @jax.jit
     def total_loss(self, batch, grad_params, rng=None, critic_value_params=None):
-        """Path-supervised Phase1 loss; dispatches on ``planner_type``."""
+        """Path-supervised Phase1 loss (forward-bridge-residual planner)."""
         return self._total_loss_forward_bridge(
-            batch, grad_params, rng, critic_value_params, 'forward_bridge_residual',
+            batch, grad_params, rng, critic_value_params,
         )
 
 
@@ -1947,15 +1821,6 @@ def _get_common_config():
             dynamics_lambda=1.0,
             # Linear-SDE bridge denominator offset. 0.0 is the hard endpoint bridge.
             bridge_gamma_inv=0.0,
-            # Theta schedule selector. ``linear_beta`` keeps the diffusion-style
-            # schedule. ``prefix_progress`` calibrates
-            # the hard-bridge marginal interpolation so that the actor-visible
-            # prefix already reaches a meaningful fraction of the subgoal
-            # displacement (``c_i = (i / K) ** progress_alpha``); ``theta_total``
-            # controls the cumulative rate ``Theta_K``.
-            theta_schedule='prefix_progress',
-            theta_total=1.0,
-            progress_alpha=0.8,
             residual_model_hidden_dims=(512, 512, 512),
             path_loss_normalized=True,
             layer_norm=True,
@@ -1965,24 +1830,6 @@ def _get_common_config():
             # N=1 TRL baseline (gap10/wmax5); tune sweeps vary these two knobs.
             subgoal_value_gap_scale=10.0,
             subgoal_value_weight_max=5.0,
-            # Goal input to the subgoal estimator. 'full' preserves historical
-            # behavior; 'phi' uses task goal-representation channels
-            # (ManipSpace cube positions, else maze xy).
-            subgoal_goal_representation='phi',
-            # Subgoal target representation:
-            #   - 'absolute'    : subgoal_net predicts s_{t+K}, bridge is trained
-            #                     in absolute state space (legacy behavior).
-            #   - 'displacement': subgoal_net predicts Delta = s_{t+K} - s_t and
-            #                     the bridge / residual chain is trained in the
-            #                     local frame with z0 = 0, zK = Delta.  Aligns
-            #                     with the prior that endpoints are small offsets
-            #                     from the current state.  External APIs still
-            #                     expose absolute states.
-            subgoal_target_mode='displacement',
-            # Residual/bridge conditioning frame, separate from subgoal_target_mode:
-            #   - absolute: residual net uses (s_1, s_K, i/K)
-            #   - displacement: residual net uses (s_1, delta, i/K), delta=s_K-s_1
-            residual_target_mode='displacement',
             # NOTE: in the standard `main.py` training path, these two are
             # overwritten in `_prepare_configs` to mirror the critic's
             # `value_hidden_dims` / `layer_norm` so that the borrowed critic
@@ -2006,24 +1853,11 @@ def _get_common_config():
             subgoal_flow_steps=8,
             subgoal_flow_t_min=1e-4,
             subgoal_flow_velocity_reg=0.0,
-            subgoal_eval_selection='best_of_n_value',
             subgoal_eval_num_samples=4,
-            subgoal_eval_include_zero_candidate=False,
             subgoal_eval_score_mode='ratio',
             subgoal_eval_seed=0,
             discount=0.99,
             subgoal_steps=25,
-            # When False: PathHGCDataset overrides high_actor_targets with the
-            # K-step horizon endpoint s_{t+K}, so the dynamics bridge / subgoal_net teacher is
-            # always K steps ahead even if the episode goal s_{t_g} is closer than K.
-            # Default True: clip per-row to s_{min(t+K, t_g)} for both the bridge endpoint
-            # (high_actor_targets) and the subgoal_net teacher, and pad trajectory_segment
-            # tail with s_{t_g} for steps beyond t_g. This trains the bridge to "arrive
-            # and stay" at close goals so subgoal predictions near the goal stay
-            # in-distribution and reduces hovering near the goal.
-            clip_path_to_goal=True,
-            # Path planner type (fixed to forward_bridge_residual in this codepath).
-            planner_type='forward_bridge_residual',
             forward_bridge_mode='mean',
             forward_bridge_use_path_loss=True,
             forward_bridge_dedup_first_step_loss=False,
@@ -2045,7 +1879,6 @@ def _get_common_config():
             # Optional cap for same-trajectory sampled goals. None/<=0 keeps
             # the historical behavior of sampling up to the episode terminal.
             max_goal_steps=None,
-            max_goal_steps_from_env=False,
             gc_negative=True,
             p_aug=0.0,
             frame_stack=ml_collections.config_dict.placeholder(int),
@@ -2067,10 +1900,4 @@ def get_dynamics_config():
     c.path_eval_slice = [0, 1]
     c.idm_loss_weight = 1.0
     c.idm_hidden_dims = (512, 512, 512)
-    # Dynamics model parameterization: exact bridge posterior mean plus a
-    # variance-scaled learned residual.
-    c.dynamics_model_type = 'exact_residual'
-    c.exact_residual_scale = 1.0
-    c.exact_residual_reg_weight = 1.0e-4
-    c.exact_residual_bridge_match_weight = 0.0
     return c

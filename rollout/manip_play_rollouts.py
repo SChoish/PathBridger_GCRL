@@ -66,12 +66,10 @@ from utils.run_io import (
 )
 
 
-def _eval_subgoal_selection(cfg: dict[str, Any]) -> str:
-    return str(cfg.get('subgoal_eval_selection', 'zero_noise')).lower()
-
-
 def _uses_eval_subgoal(cfg: dict[str, Any]) -> bool:
-    return _eval_subgoal_selection(cfg) in ('best_of_n_value', 'best_of_n_goal_l2', 'sample')
+    # Eval selection is fixed to best_of_n_value (critic-scored best-of-N).
+    del cfg
+    return True
 
 
 def _predict_subgoal_for_rollout(

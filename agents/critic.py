@@ -547,7 +547,6 @@ def get_config():
             value_p_randomgoal=0.0,
             value_geom_sample=True,
             max_goal_steps=None,
-            max_goal_steps_from_env=False,
             gc_negative=False,
         )
     )

@@ -546,23 +546,21 @@ class PathHGCDataset(HGCDataset):
                     f'trajectory_indices shape must match trajectory_segment[:2], got {idxs.shape} vs {seg.shape[:2]}.'
                 )
             diffs = np.diff(idxs, axis=1)
-            if bool(self.config.get('clip_path_to_goal', False)):
-                # clip_path mode pads segment past t_g; allowed step sizes are 1 (real)
-                # or 0 (frozen at t_clip). 0-runs must be a contiguous suffix per row.
-                if not np.all((diffs == 1) | (diffs == 0)):
+            # clip_path mode (always on) pads segment past t_g; allowed step sizes
+            # are 1 (real) or 0 (frozen at t_clip). 0-runs must be a contiguous
+            # suffix per row.
+            if not np.all((diffs == 1) | (diffs == 0)):
+                raise ValueError(
+                    'trajectory_indices step size must be 0 or 1 under clip_path_to_goal.'
+                )
+            # First 0 in a row (if any) must mark the start of an all-0 suffix.
+            first_zero = np.argmax(diffs == 0, axis=1)
+            has_zero = np.any(diffs == 0, axis=1)
+            for i in np.flatnonzero(has_zero):
+                if not np.all(diffs[i, first_zero[i]:] == 0):
                     raise ValueError(
-                        'trajectory_indices step size must be 0 or 1 under clip_path_to_goal.'
+                        'trajectory_indices padding must be a contiguous suffix per row.'
                     )
-                # First 0 in a row (if any) must mark the start of an all-0 suffix.
-                first_zero = np.argmax(diffs == 0, axis=1)
-                has_zero = np.any(diffs == 0, axis=1)
-                for i in np.flatnonzero(has_zero):
-                    if not np.all(diffs[i, first_zero[i]:] == 0):
-                        raise ValueError(
-                            'trajectory_indices padding must be a contiguous suffix per row.'
-                        )
-            elif not np.all(diffs == 1):
-                raise ValueError('trajectory_indices must be contiguous with step size 1.')
             if 'trajectory_terminal_indices' in batch:
                 terms = np.asarray(batch['trajectory_terminal_indices'])
                 if np.any(idxs[:, -1] > terms):
@@ -578,21 +576,18 @@ class PathHGCDataset(HGCDataset):
         traj_indices = idxs[:, None] + self.path_offsets
         finals = lookup_final_indices(self.terminal_locs, idxs)
 
-        clip_path = bool(self.config.get('clip_path_to_goal', False))
-        if clip_path:
-            # Per-row endpoint t_clip = min(t+K, t_g). Past t_clip we freeze the index so
-            # trajectory_segment is padded with s_{t_clip} (= clipped high_actor_targets),
-            # keeping bridge endpoint, subgoal_net teacher, and segment tail consistent.
-            target_idxs = batch.get('high_actor_target_idxs')
-            if target_idxs is None:
-                raise RuntimeError(
-                    'clip_path_to_goal=True requires HGCDataset.sample to expose '
-                    'high_actor_target_idxs in the batch.'
-                )
-            t_clip = np.asarray(target_idxs, dtype=np.int64)
-            seg_indices = np.minimum(traj_indices, t_clip[:, None])
-        else:
-            seg_indices = traj_indices
+        # clip_path mode (always on): per-row endpoint t_clip = min(t+K, t_g). Past
+        # t_clip we freeze the index so trajectory_segment is padded with
+        # s_{t_clip} (= clipped high_actor_targets), keeping bridge endpoint,
+        # subgoal_net teacher, and segment tail consistent.
+        target_idxs = batch.get('high_actor_target_idxs')
+        if target_idxs is None:
+            raise RuntimeError(
+                'clip_path_to_goal=True requires HGCDataset.sample to expose '
+                'high_actor_target_idxs in the batch.'
+            )
+        t_clip = np.asarray(target_idxs, dtype=np.int64)
+        seg_indices = np.minimum(traj_indices, t_clip[:, None])
 
         traj = self.get_observations(seg_indices)
         batch['trajectory_segment'] = np.asarray(traj, dtype=np.float32)

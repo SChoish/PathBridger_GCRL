@@ -35,7 +35,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from agents.dynamics import DynamicsAgent
+from agents.dynamics import DynamicsAgent, InverseDynamicsMLP
 from utils.env_utils import make_env_and_datasets
 from utils.run_io import (
     list_checkpoint_suffixes,
@@ -62,7 +62,6 @@ from rollout.plot import (
     overlay_rgb_frames_obs2d_panel,
     write_rgb_array_mp4,
 )
-from utils.inverse_dynamics import InverseDynamicsMLP
 from rollout.maze_navigator import MazeNavigatorMap
 
 
