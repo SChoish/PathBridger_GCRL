@@ -1,0 +1,24 @@
+# Actor-only SPI finetuning defaults (best-params bundle mode).
+#
+# Loads dynamics/critic from docs/env_best_runs_choi/checkpoints/<env>/.
+# Actor is random-init; subgoal pipeline uses eval_n + eval_temperature from env_best_params.json.
+
+pretrained_ckpt_dir: ''
+use_best_params_bundle: true
+best_params_json: docs/env_best_runs_choi/env_best_params.json
+checkpoint_bundle_root: docs/env_best_runs_choi/checkpoints
+init_actor: true
+use_spi_subgoal_pipeline: true
+
+actor_spi_steps: 100000
+actor_spi_lr: 0.0003
+spi_tau: 1.0
+actor_spi_batch_size: 0
+
+# Eval and save at 50K and 100K by default.
+eval_interval: 50000
+save_interval: 50000
+actor_spi_eval_episodes: 25
+
+freeze_non_actor: true
+reset_actor_optimizer: true

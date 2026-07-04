@@ -1,0 +1,36 @@
+# Flow subgoal + TRL sweep: train N=1, final eval N sweep
+# env=antmaze-medium-navigate-v0 gap=3.0 wmax=5.0 train_N=1 gamma=0.99 vdist_pow=0.0
+# final_eval_subgoal_eval_num_samples=[1, 2, 4, 8, 16]; episodes_per_task=25
+env_name: antmaze-medium-navigate-v0
+run_group: flow_trl_feval_amm_g3_w5_n1
+train_epochs: 600
+log_every_n_epochs: 10
+save_every_n_epochs: 100
+horizon: 25
+eval_freq: 100
+eval_episodes_per_task: 10
+final_eval_episodes_per_task: 25
+dynamics:
+  subgoal_distribution: flow
+  subgoal_stochastic_loss: mse
+  subgoal_num_samples: 1
+  subgoal_value_gap_scale: 3.0
+  subgoal_value_weight_max: 5.0
+  actor_p_curgoal: 0.0
+  actor_p_trajgoal: 1.0
+  actor_p_randomgoal: 0.0
+  actor_geom_sample: false
+  subgoal_temperature: 1.0
+  subgoal_eval_seed: 0
+  subgoal_eval_num_samples: 1
+critic_agent:
+  full_chunk_horizon: 25
+  discount: 0.99
+  value_distance_weight_power: 0.0
+  value_p_curgoal: 0.0
+  value_p_trajgoal: 1.0
+  value_p_randomgoal: 0.0
+actor:
+  spi_tau: 5.0
+batch_size: 1024
+final_eval_subgoal_eval_num_samples: 1,2,4,8,16

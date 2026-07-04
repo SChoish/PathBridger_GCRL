@@ -1,0 +1,25 @@
+[project]
+name = "pathbridger"
+version = "0.1.0"
+description = "Flow subgoal + forward-bridge residual dynamics + TRL critic + SPI actor for offline goal-conditioned RL on OGBench."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "ogbench",
+    "jax[cuda12] >= 0.4.26",
+    "flax >= 0.8.4",
+    "ml_collections",
+    "pyyaml",
+    "matplotlib",
+    "imageio-ffmpeg",
+    "moviepy",
+    "wandb",
+    "absl-py",
+    "tqdm",
+    "pillow",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"

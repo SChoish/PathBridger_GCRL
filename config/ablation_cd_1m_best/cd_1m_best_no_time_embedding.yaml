@@ -1,0 +1,41 @@
+# Cube-double 1M best ablation: disable time embedding on both PathResidualNet
+# and SubgoalFlowNet (sinusoidal lift off; raw scalar i/K or u still used).
+# Base: checkpoints/1m_env_best/cd_cube-double/config_used.yaml
+env_name: cube-double-play-v0
+run_group: ablate_cd_1m_best_no_time_embedding
+train_steps: 1000000
+log_every_n_steps: 10000
+save_every_n_steps: 100000
+horizon: 40
+eval_every_n_steps: 0
+eval_freq: 0
+eval_episodes_per_task: 10
+final_eval_episodes_per_task: 0
+eval_max_chunks: 200
+dynamics:
+  subgoal_distribution: flow
+  subgoal_stochastic_loss: mse
+  subgoal_num_samples: 1
+  subgoal_value_gap_scale: 10.0
+  subgoal_value_weight_max: 5.0
+  forward_bridge_dedup_first_step_loss: false
+  actor_p_curgoal: 0.0
+  actor_p_trajgoal: 1.0
+  actor_p_randomgoal: 0.0
+  actor_geom_sample: false
+  subgoal_temperature: 1.0
+  subgoal_eval_seed: 0
+  dynamics_N: 40
+  subgoal_steps: 40
+  subgoal_eval_num_samples: 1
+critic_agent:
+  full_chunk_horizon: 40
+  discount: 0.99
+  value_distance_weight_power: 1.0
+  value_p_curgoal: 0.0
+  value_p_trajgoal: 1.0
+  value_p_randomgoal: 0.0
+actor:
+  spi_tau: 5.0
+batch_size: 1024
+final_eval_subgoal_eval_num_samples: ''

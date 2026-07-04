@@ -1,0 +1,36 @@
+# Flow+TRL puzzle-3x3 @ 1M gradient steps (from gap_tune best: gap=0.5, wmax=5, train_N=1)
+# spe=953 (valid_starts=975000, batch=1024); legacy 600 epochs ≈ 571800 steps
+# Report match: IDM 0.736 / ACTOR 0.608 @ N=32 T=1 (flow_trl_gap_tune_p3_g0p5_w5_n1)
+env_name: puzzle-3x3-play-v0
+run_group: flow_trl_gap_tune_p3_g0p5_w5_n1_1m
+train_steps: 1000000
+log_every_n_steps: 10000
+save_every_n_steps: 100000
+eval_every_n_steps: 0
+horizon: 25
+eval_episodes_per_task: 10
+final_eval_episodes_per_task: 25
+dynamics:
+  subgoal_distribution: flow
+  subgoal_stochastic_loss: mse
+  subgoal_num_samples: 1
+  subgoal_value_gap_scale: 0.5
+  subgoal_value_weight_max: 5.0
+  actor_p_curgoal: 0.0
+  actor_p_trajgoal: 0.5
+  actor_p_randomgoal: 0.5
+  actor_geom_sample: true
+  subgoal_temperature: 1.0
+  subgoal_eval_seed: 0
+  subgoal_eval_num_samples: 1
+critic_agent:
+  full_chunk_horizon: 25
+  discount: 0.99
+  value_distance_weight_power: 0.5
+  value_p_curgoal: 0.0
+  value_p_trajgoal: 1.0
+  value_p_randomgoal: 0.0
+actor:
+  spi_tau: 5.0
+batch_size: 1024
+final_eval_subgoal_eval_num_samples: 2,8,16,32
