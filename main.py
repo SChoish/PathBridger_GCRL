@@ -36,8 +36,7 @@ from utils.env_utils import make_env_and_datasets
 from utils.flax_utils import restore_agent, save_agent
 from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, setup_wandb
 from utils.ogbench_eval_rollout import rollout_chunked_eval_episode
-from utils.eval_results_io import eval_result_path, save_eval_results
-from utils.run_io import parse_int_list
+from utils.run_io import eval_result_path, parse_int_list, save_eval_results
 from utils.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
 
 FLAGS = flags.FLAGS

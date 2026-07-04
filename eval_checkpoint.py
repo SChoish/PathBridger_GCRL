@@ -40,8 +40,8 @@ from main import (
 from utils.datasets import Dataset, PathHGCDataset
 from utils.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
 from utils.env_utils import make_env_and_datasets
-from utils.eval_results_io import eval_result_path, save_eval_results
 from utils.run_io import (
+    eval_result_path,
     list_checkpoint_suffixes,
     load_checkpoint_pkl,
     parse_int_list,
@@ -49,6 +49,7 @@ from utils.run_io import (
     resolve_actor_checkpoint_dir,
     resolve_critic_checkpoint_dir,
     resolve_dynamics_checkpoint_dir,
+    save_eval_results,
 )
 
 
