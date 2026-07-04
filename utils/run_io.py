@@ -1,19 +1,16 @@
-"""Shared run-directory / checkpoint / parsing helpers used by training and rollout scripts."""
+"""Shared checkpoint, parsing, and evaluation-result I/O helpers for production runs."""
 
 from __future__ import annotations
 
+import csv
 import json
 import pickle
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import flax
-import numpy as np
-from ml_collections import ConfigDict
-
-from agents.dynamics import get_dynamics_config
-from utils.datasets import Dataset
 
 
 # --- checkpoint helpers -------------------------------------------------------
@@ -82,32 +79,6 @@ def resolve_actor_checkpoint_dir(run_dir: Path, *, required: bool = False) -> Pa
     return d
 
 
-# --- flags.json ---------------------------------------------------------------
-
-
-def load_run_flags(run_dir: Path) -> tuple[ConfigDict, str]:
-    """Return ``(merged dynamics config, env_name)`` from ``flags.json`` in ``run_dir``."""
-    flags_path = Path(run_dir) / 'flags.json'
-    if not flags_path.is_file():
-        raise FileNotFoundError(f'Missing flags.json under {run_dir}')
-    with open(flags_path, 'r', encoding='utf-8') as f:
-        flags = json.load(f)
-    env_name = flags.get('env_name')
-    if not env_name and isinstance(flags.get('flags'), dict):
-        env_name = flags['flags'].get('env_name')
-    if not env_name:
-        raise KeyError('flags.json must contain env_name (top-level or flags.env_name)')
-    cfg = get_dynamics_config()
-    agent_updates = flags.get('agent')
-    if agent_updates:
-        for k, v in agent_updates.items():
-            cfg[k] = v
-    elif isinstance(flags.get('dynamics'), dict):
-        for k, v in flags['dynamics'].items():
-            cfg[k] = v
-    return cfg, env_name
-
-
 # --- parsing ------------------------------------------------------------------
 
 
@@ -117,46 +88,122 @@ def parse_int_list(text: str) -> tuple[int, ...]:
     return tuple(int(item) for item in items)
 
 
-# --- goal distance helpers ----------------------------------------------------
+# --- evaluation result files --------------------------------------------------
+
+def eval_result_path(
+    run_dir: Path | str,
+    *,
+    epoch: int,
+    eval_n: int,
+    subgoal_temperature: float | None = None,
+) -> Path:
+    if subgoal_temperature is None:
+        return Path(run_dir) / 'eval_results' / f'epoch{int(epoch)}_n{int(eval_n)}.json'
+    temp_tag = _temp_tag(float(subgoal_temperature))
+    return Path(run_dir) / 'eval_results' / f'epoch{int(epoch)}_t{temp_tag}_n{int(eval_n)}.json'
 
 
-def goal_distance(s: np.ndarray, g: np.ndarray, dims: tuple[int, ...] | None) -> float:
-    if dims:
-        idx = np.asarray(dims, dtype=np.int32)
-        return float(np.linalg.norm(s[idx] - g[idx]))
-    return float(np.linalg.norm(s - g))
+def _temp_tag(temperature: float) -> str:
+    if abs(temperature - round(temperature)) < 1e-9:
+        return str(int(round(temperature)))
+    return format(temperature, 'g').replace('.', 'p')
 
 
-def goal_within_tol(
-    s: np.ndarray, g: np.ndarray, dims: tuple[int, ...] | None, tol: float
-) -> bool:
-    """``tol > 0``일 때만 사용; ``tol`` 이하(``<=``)면 도달."""
-    if tol is None or float(tol) <= 0.0:
-        return False
-    return goal_distance(s, g, dims) <= float(tol)
+def save_eval_results(
+    run_dir: Path | str,
+    *,
+    epoch: int,
+    subgoal_eval_num_samples: int,
+    task_ids: tuple[int, ...] | list[int],
+    episodes_per_task: int,
+    metrics: dict[str, Any],
+    fg: dict[str, Any],
+    root: dict[str, Any],
+    subgoal_temperature: float | None = None,
+) -> Path:
+    run_dir = Path(run_dir)
+    eval_n = int(subgoal_eval_num_samples)
+    def _task_rates(prefix: str) -> dict[str, float]:
+        return {
+            str(tid): float(metrics[f'{prefix}/task_{tid}/success_rate'])
+            for tid in task_ids
+            if f'{prefix}/task_{tid}/success_rate' in metrics
+        }
 
+    idm_tasks = _task_rates('eval_idm')
+    actor_tasks = _task_rates('eval')
+    four_way_prefixes = (
+        'eval_flow_idm',
+        'eval_flow_actor',
+    )
+    four_way_means = {
+        prefix: float(metrics[f'{prefix}/success_rate_mean'])
+        for prefix in four_way_prefixes
+        if f'{prefix}/success_rate_mean' in metrics
+    }
+    four_way_tasks = {
+        prefix: _task_rates(prefix)
+        for prefix in four_way_prefixes
+        if any(f'{prefix}/task_{tid}/success_rate' in metrics for tid in task_ids)
+    }
+    dyn = root.get('dynamics', {})
+    record: dict[str, Any] = {
+        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'run_dir': str(run_dir.resolve()),
+        'run_group': str(fg.get('run_group', '')),
+        'env_name': str(fg.get('env_name', '')),
+        'epoch': int(epoch),
+        'subgoal_eval_num_samples': eval_n,
+        'subgoal_num_samples_train': int(dyn.get('subgoal_num_samples', 0)),
+        'subgoal_value_gap_scale': float(dyn.get('subgoal_value_gap_scale', 0.0)),
+        'subgoal_value_weight_max': float(dyn.get('subgoal_value_weight_max', 0.0)),
+        'subgoal_temperature': float(
+            subgoal_temperature if subgoal_temperature is not None else dyn.get('subgoal_temperature', 1.0)
+        ),
+        'eval_episodes_per_task': int(episodes_per_task),
+        'eval_budget': 'env_max_episode_steps',
+        'eval_task_ids': [int(t) for t in task_ids],
+        'idm_success_rate_mean': float(metrics.get('eval_idm/success_rate_mean', float('nan'))),
+        'actor_success_rate_mean': float(metrics.get('eval/success_rate_mean', float('nan'))),
+        'idm_task_success_rates': idm_tasks,
+        'actor_task_success_rates': actor_tasks,
+        'four_way_success_rate_means': four_way_means,
+        'four_way_task_success_rates': four_way_tasks,
+    }
+    out_dir = run_dir / 'eval_results'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = eval_result_path(
+        run_dir,
+        epoch=epoch,
+        eval_n=eval_n,
+        subgoal_temperature=subgoal_temperature,
+    )
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(record, f, indent=2)
+        f.write('\n')
 
-# --- offline trajectory helpers (used by rollout scripts) ---------------------
-
-
-def episode_slices(terminals: np.ndarray) -> list[tuple[int, int]]:
-    """``(start, end)`` inclusive indices for each episode."""
-    terminals = np.asarray(terminals).reshape(-1)
-    ends = np.nonzero(terminals > 0)[0]
-    if len(ends) == 0:
-        raise ValueError('No terminal flags found; cannot split episodes.')
-    starts = np.concatenate([[0], ends[:-1] + 1])
-    return [(int(s), int(e)) for s, e in zip(starts, ends)]
-
-
-def get_trajectory(dataset: Dataset, traj_idx: int) -> np.ndarray:
-    obs = np.asarray(dataset['observations'])
-    terms = np.asarray(dataset['terminals'])
-    slices = episode_slices(terms)
-    if traj_idx < 0 or traj_idx >= len(slices):
-        raise IndexError(f'traj_idx={traj_idx} out of range [0, {len(slices) - 1}]')
-    s, e = slices[traj_idx]
-    return obs[s : e + 1].copy()
+    csv_path = out_dir / 'all.csv'
+    row = {
+        'timestamp': record['timestamp'],
+        'epoch': record['epoch'],
+        'eval_n': eval_n,
+        'idm_mean': record['idm_success_rate_mean'],
+        'actor_mean': record['actor_success_rate_mean'],
+        'idm_tasks': ','.join(f'{k}:{v:.4f}' for k, v in sorted(idm_tasks.items())),
+        'actor_tasks': ','.join(f'{k}:{v:.4f}' for k, v in sorted(actor_tasks.items())),
+    }
+    for prefix in four_way_prefixes:
+        row[f'{prefix}_mean'] = four_way_means.get(prefix, '')
+        row[f'{prefix}_tasks'] = ','.join(
+            f'{k}:{v:.4f}' for k, v in sorted(four_way_tasks.get(prefix, {}).items())
+        )
+    write_header = not csv_path.is_file()
+    with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+    return json_path
 
 
 __all__ = [
@@ -166,10 +213,7 @@ __all__ = [
     'resolve_dynamics_checkpoint_dir',
     'resolve_critic_checkpoint_dir',
     'resolve_actor_checkpoint_dir',
-    'load_run_flags',
     'parse_int_list',
-    'goal_distance',
-    'goal_within_tol',
-    'episode_slices',
-    'get_trajectory',
+    'eval_result_path',
+    'save_eval_results',
 ]

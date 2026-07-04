@@ -19,7 +19,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import tqdm
-import wandb
 import yaml
 from absl import app, flags
 
@@ -37,8 +36,7 @@ from utils.env_utils import make_env_and_datasets
 from utils.flax_utils import restore_agent, save_agent
 from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, setup_wandb
 from utils.ogbench_eval_rollout import rollout_chunked_eval_episode
-from utils.eval_results_io import eval_result_path, save_eval_results
-from utils.run_io import parse_int_list
+from utils.run_io import eval_result_path, parse_int_list, save_eval_results
 from utils.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
 
 FLAGS = flags.FLAGS
@@ -175,8 +173,7 @@ flags.DEFINE_boolean(
     False,
     'If True, train the SPI actor jointly with dynamics/critic (legacy behavior). '
     'Default False: skip actor proposal build/rescore/update/checkpoint during the main run; '
-    'the SPI actor is instead fine-tuned afterwards via train_actor_spi.py. In-training and '
-    'checkpoint eval run IDM-only when the actor is not trained.',
+    'deployment workflow keeps this false for IDM training, then runs train_actor_spi.py for 50K actor finetuning.',
 )
 
 _SPI_ACTOR_KEYS = {
@@ -1114,8 +1111,7 @@ def _evaluate_env_tasks(
     """OGBench-style eval: success is decided **only** by ``info['success']`` (any step). No tolerance diagnostic.
 
     ``idm_only`` restricts evaluation to the IDM policy (flow subgoal + inverse dynamics)
-    and skips the SPI-actor rollout. Use when the actor has not been trained (see
-    ``--train_actor_spi``): the actor policy is fine-tuned separately afterwards.
+    and skips the SPI-actor rollout. Use when the actor has not been trained (see ``--train_actor_spi``).
     """
     if not task_ids:
         return {}
@@ -1734,6 +1730,8 @@ def main(_):
             metrics['time/total_sec'] = time.time() - first_time
             last_log = time.time()
             if FLAGS.use_wandb:
+                import wandb
+
                 wandb.log(metrics, step=step)
             train_logger.log(metrics, step=step)
             run_logger.info(

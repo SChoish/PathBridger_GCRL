@@ -10,7 +10,40 @@ from typing import Any, Callable
 
 import numpy as np
 
-from utils.ogbench_eval_helpers import append_ogbench_render, update_episode_env_success
+
+
+def _info_success(info: dict[str, Any] | Any) -> bool:
+    """Normalize OGBench ``info['success']`` values to ``bool``."""
+    if not isinstance(info, dict):
+        return False
+    value = info.get('success', False)
+    try:
+        return bool(np.asarray(value).item())
+    except (ValueError, TypeError):
+        return bool(value)
+
+
+def _append_render_frame(
+    render: list[np.ndarray],
+    env: Any,
+    goal_frame: np.ndarray | None,
+    *,
+    should_render: bool,
+    step: int,
+    done: bool,
+    video_frame_skip: int,
+) -> None:
+    """Append one RGB uint8 frame when rendering is enabled and the frame-skip rule matches."""
+    if not should_render:
+        return
+    skip = max(1, int(video_frame_skip))
+    if (step % skip != 0) and not done:
+        return
+    raw = np.asarray(env.render())
+    frame = raw.astype(np.uint8, copy=False) if raw.dtype != np.uint8 else raw.copy()
+    if goal_frame is not None:
+        frame = np.concatenate([np.asarray(goal_frame, dtype=np.uint8), frame], axis=0)
+    render.append(frame)
 
 
 def _env_max_episode_steps(env: Any) -> int:
@@ -61,11 +94,11 @@ def execute_action_chunk_eval(
         obs = np.asarray(_ob, dtype=np.float32).reshape(-1)
         terminated = bool(term)
         truncated = bool(trunc)
-        saw_env_success = update_episode_env_success(saw_env_success, info)
+        saw_env_success = bool(saw_env_success or _info_success(info))
         if step_counter is not None:
             done = bool(terminated or truncated)
             if render_buf is not None:
-                append_ogbench_render(
+                _append_render_frame(
                     render_buf,
                     env,
                     goal_frame,

@@ -5,8 +5,6 @@ from datetime import datetime
 import absl.flags as flags
 import ml_collections
 import numpy as np
-import wandb
-from PIL import Image, ImageEnhance
 
 
 class CsvLogger:
@@ -19,7 +17,7 @@ class CsvLogger:
         self.header = None
         self.file = None
         self._rows_since_flush = 0
-        self.disallowed_types = (wandb.Image, wandb.Video, wandb.Histogram)
+        self.disallowed_types = _wandb_media_types()
 
     def _filtered_row(self, row):
         return {k: v for k, v in row.items() if not isinstance(v, self.disallowed_types)}
@@ -88,6 +86,25 @@ def get_flag_dict():
     return flag_dict
 
 
+def _import_wandb():
+    try:
+        import wandb  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            'Weights & Biases support is optional in the production install. '
+            'Install the `experiment` extra or add `wandb` to use --use_wandb.'
+        ) from exc
+    return wandb
+
+
+def _wandb_media_types():
+    try:
+        wandb = _import_wandb()
+    except RuntimeError:
+        return ()
+    return (wandb.Image, wandb.Video, wandb.Histogram)
+
+
 def setup_wandb(
     entity=None,
     project='project',
@@ -98,6 +115,7 @@ def setup_wandb(
     """Set up Weights & Biases for logging."""
     if mode is None:
         mode = os.environ.get('WANDB_MODE', 'online')
+    wandb = _import_wandb()
     wandb_output_dir = tempfile.mkdtemp()
     tags = [group] if group is not None else None
 
@@ -160,6 +178,13 @@ def get_wandb_video(renders=None, n_cols=None, fps=15):
 
         # Decrease brightness of the padded frames.
         final_frame = render[-1]
+        try:
+            from PIL import Image, ImageEnhance
+        except ImportError as exc:
+            raise RuntimeError(
+                'Video logging requires Pillow. Install the `visualization` extra or add `pillow`.'
+            ) from exc
+
         final_image = Image.fromarray(final_frame)
         enhancer = ImageEnhance.Brightness(final_image)
         final_image = enhancer.enhance(0.5)
@@ -174,4 +199,5 @@ def get_wandb_video(renders=None, n_cols=None, fps=15):
 
     renders = reshape_video(renders, n_cols)  # (t, c, nr * h, nc * w)
 
+    wandb = _import_wandb()
     return wandb.Video(renders, fps=fps, format='mp4')
