@@ -45,7 +45,9 @@ MUJOCO_GL=egl python eval_checkpoint.py --run_dir=runs/<run_dir> --epoch=1000 --
 ```
 
 `eval_checkpoint.py` reads the saved `flags.json`, restores the checkpoint parameters, rebuilds the
-matching OGBench environment, and writes JSON metrics under `runs/<run_dir>/eval_results/`.
+matching OGBench environment, and writes JSON metrics under `runs/<run_dir>/eval_results/`. If the
+saved run does not specify `eval_task_ids`, checkpoint evaluation defaults to the standard OGBench
+task sweep `1,2,3,4,5`; pass `--eval_task_ids=...` to override it.
 
 ## Default deployment workflow
 
@@ -61,6 +63,9 @@ python train_actor_spi.py --pretrained_ckpt_dir=runs/<run_dir> --actor_spi_steps
 ```
 
 Weights & Biases is now optional. If `--use_wandb=True` is requested, install the `experiment` extra first.
+
+The dynamics path objective trains the bridge path once over the supervised trajectory segment. The
+first-step diagnostic is still logged, but it is not added as a second standalone loss term.
 
 ## Repository policy
 

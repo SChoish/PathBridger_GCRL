@@ -77,7 +77,7 @@ def main() -> None:
     p.add_argument('--run_dir', type=str, required=True)
     p.add_argument('--epoch', type=int, default=1000, help='Checkpoint suffix for dynamics/critic/actor.')
     p.add_argument('--seed', type=int, default=-1, help='Agent RNG seed; -1 uses flags.json flags.seed.')
-    p.add_argument('--eval_task_ids', type=str, default='', help='Override e.g. "1,2,3,4,5" (empty = flags).')
+    p.add_argument('--eval_task_ids', type=str, default='', help='Override e.g. "1,2,3,4,5" (empty = flags, default 1-5).')
     p.add_argument('--eval_episodes_per_task', type=int, default=-1, help='-1 = use flags.')
     p.add_argument(
         '--subgoal_eval_num_samples',
@@ -190,7 +190,7 @@ def main() -> None:
             actor_agent = load_checkpoint_pkl(actor_agent, actor_pkl)
 
     task_ids = parse_int_list(args.eval_task_ids) if str(args.eval_task_ids).strip() else parse_int_list(
-        str(fg.get('eval_task_ids', '1'))
+        str(fg.get('eval_task_ids', '1,2,3,4,5'))
     )
     ep_task = int(fg['eval_episodes_per_task']) if int(args.eval_episodes_per_task) < 0 else int(args.eval_episodes_per_task)
 
@@ -239,7 +239,6 @@ def main() -> None:
         video_episodes_per_task=0,
         video_frame_skip=4,
         video_fps=15,
-        wandb_enabled=False,
         subgoal_override_goal=bool(args.subgoal_override_goal),
         idm_only=idm_only,
     )

@@ -145,6 +145,11 @@ flags.DEFINE_integer(
     100,
     'Deprecated: converted to eval_every_n_steps when eval_every_n_steps <= 0; <= 0 disables non-final eval.',
 )
+flags.DEFINE_string(
+    'eval_task_ids',
+    '1,2,3,4,5',
+    'Comma-separated OGBench task ids for env eval (also written to flags.json for eval_checkpoint.py).',
+)
 flags.DEFINE_integer('eval_episodes_per_task', 10, 'Number of env evaluation episodes to run for each task id.')
 flags.DEFINE_integer(
     'final_eval_episodes_per_task',
@@ -381,7 +386,6 @@ def _format_step_log(metrics: dict[str, float]) -> str:
         ('dyn_sub', 'train/dynamics/phase1/loss_subgoal_interval_mean'),
         ('dyn_idm', 'train/dynamics/phase1/loss_idm_interval_mean'),
         ('fb_path', 'train/dynamics/forward_bridge/loss_path_interior_interval_mean'),
-        ('fb_next', 'train/dynamics/forward_bridge/loss_path_next_interval_mean'),
         ('critic_chunk', 'train/critic/chunk_critic/critic_loss_interval_mean'),
         ('critic_distill', 'train/critic/action_critic/distill_loss_interval_mean'),
         ('critic_value', 'train/critic/action_critic/value_loss_interval_mean'),
@@ -1383,7 +1387,9 @@ def main(_):
     eval_every_steps = _resolve_step_interval(
         int(FLAGS.eval_every_n_steps), int(FLAGS.eval_freq), spe, allow_disable=True
     )
-    eval_task_ids = (1, 2, 3, 4, 5)
+    eval_task_ids = tuple(parse_int_list(str(FLAGS.eval_task_ids)))
+    if not eval_task_ids:
+        raise ValueError('eval_task_ids must list at least one task id')
     eval_episodes_per_task = max(1, int(FLAGS.eval_episodes_per_task))
     final_eval_episodes_per_task = max(0, int(FLAGS.final_eval_episodes_per_task))
     final_eval_n_values = parse_int_list(str(FLAGS.final_eval_subgoal_eval_num_samples))

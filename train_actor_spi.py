@@ -523,7 +523,6 @@ def main(_):
             critic_agent=critic_agent,
             task_ids=eval_task_ids,
             episodes_per_task=eval_episodes,
-            wandb_enabled=False,
             subgoal_override_goal=bool(FLAGS.subgoal_override_goal),
         )
         save_eval_results(

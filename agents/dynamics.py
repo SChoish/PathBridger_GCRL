@@ -1641,26 +1641,19 @@ class DynamicsAgent(_DynamicsAgentCore):
             segment_path_loss = segment_path
 
         path_steps = int(path_pred.shape[1]) - 1
-        has_endpoint = path_loss_horizon <= 0 or path_loss_horizon >= N
-        interior_stop = -1 if has_endpoint else path_pred.shape[1]
         if path_pred.shape[1] > 2:
-            diff_interior = path_pred_loss[:, 1:interior_stop, :] - segment_path_loss[:, 1:interior_stop, :]
+            diff_interior = path_pred_loss[:, 1:-1, :] - segment_path_loss[:, 1:-1, :]
+        elif path_pred.shape[1] > 1:
+            diff_interior = path_pred_loss[:, 1:2, :] - segment_path_loss[:, 1:2, :]
+        else:
+            diff_interior = None
+        if diff_interior is not None:
             loss_fb_interior = jnp.mean(jnp.abs(diff_interior).sum(axis=-1))
         else:
             loss_fb_interior = jnp.zeros((), dtype=jnp.float32)
 
-        diff_next = path_pred_loss[:, 1, :] - segment_path_loss[:, 1, :]
-        loss_fb_next = jnp.mean(jnp.abs(diff_next).sum(axis=-1))
-
         use_path = bool(self.config.get('forward_bridge_use_path_loss', True))
-        dedup_first_step_loss = bool(self.config.get('forward_bridge_dedup_first_step_loss', False))
-        if use_path:
-            if dedup_first_step_loss and path_pred.shape[1] > 2:
-                path_fb_term = loss_fb_interior
-            else:
-                path_fb_term = loss_fb_interior + loss_fb_next
-        else:
-            path_fb_term = zero
+        path_fb_term = loss_fb_interior if use_path else zero
 
         (loss_sub, subgoal_mse, subgoal_value,
          pred_sg_out, subgoal_extra_info) = self._compute_subgoal_loss(
@@ -1671,9 +1664,9 @@ class DynamicsAgent(_DynamicsAgentCore):
         loss = w_p * path_fb_term + sg_w * loss_sub + idm_term
 
         if path_pred.shape[1] > 2:
-            bridge_path_mse = jnp.mean((path_pred[:, 1:interior_stop, :] - segment_path[:, 1:interior_stop, :]) ** 2)
+            bridge_path_mse = jnp.mean((path_pred[:, 1:-1, :] - segment_path[:, 1:-1, :]) ** 2)
             bridge_path_mse_norm = jnp.mean(
-                (path_pred_loss[:, 1:interior_stop, :] - segment_path_loss[:, 1:interior_stop, :]) ** 2
+                (path_pred_loss[:, 1:-1, :] - segment_path_loss[:, 1:-1, :]) ** 2
             )
         else:
             bridge_path_mse = zero
@@ -1706,10 +1699,6 @@ class DynamicsAgent(_DynamicsAgentCore):
         planner_id = 2.0  # fixed: forward_bridge_residual planner.
         fb_diag = {
             'forward_bridge/loss_path_interior': loss_fb_interior,
-            'forward_bridge/loss_path_next': loss_fb_next,
-            'forward_bridge/dedup_first_step_loss': jnp.asarray(
-                1.0 if dedup_first_step_loss else 0.0, dtype=jnp.float32,
-            ),
             'forward_bridge/first_step_l1_fb_path': first_step_l1_fb,
             'forward_bridge/first_step_l1_fb_path_raw': first_step_l1_fb,
             'forward_bridge/first_step_l1_fb_path_norm': first_step_l1_fb_norm,
@@ -1739,7 +1728,7 @@ class DynamicsAgent(_DynamicsAgentCore):
             'phase1/loss_dynamics': zero,
             'phase1/loss_bridge_mean_match': loss_bridge_mean_match,
             'phase1/loss_residual_reg': loss_residual_reg,
-            'phase1/loss_path_step': loss_fb_next,
+            'phase1/loss_path_step': loss_fb_interior,
             'phase1/loss_roll': zero,
             'phase1/loss_subgoal': loss_sub,
             'phase1/loss_subgoal_mse': subgoal_mse.mean(),
@@ -1860,7 +1849,6 @@ def _get_common_config():
             subgoal_steps=25,
             forward_bridge_mode='mean',
             forward_bridge_use_path_loss=True,
-            forward_bridge_dedup_first_step_loss=False,
             # If >0, train forward-bridge path supervision only on the prefix
             # steps 1..H (plus the exact endpoint for diagnostics).  This keeps
             # Residual path supervision aligned with the actor/IDM chunk horizon without
