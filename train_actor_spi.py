@@ -42,7 +42,6 @@ from main import (
 from agents.dynamics import DynamicsAgent
 from utils.datasets import Dataset, PathHGCDataset
 from utils.env_utils import make_env_and_datasets
-from utils.eval_results_io import save_eval_results
 from utils.flax_utils import TrainState, restore_agent, save_agent
 from utils.freeze_check import assert_frozen, assert_trained, summarize_param_diff
 from utils.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
@@ -53,6 +52,7 @@ from utils.run_io import (
     resolve_actor_checkpoint_dir,
     resolve_critic_checkpoint_dir,
     resolve_dynamics_checkpoint_dir,
+    save_eval_results,
 )
 
 
@@ -60,7 +60,7 @@ _REPO = Path(__file__).resolve().parent
 
 flags.DEFINE_string('pretrained_ckpt_dir', '', 'Pretrained run dir. Empty -> select runs/ best-IDM eval.')
 flags.DEFINE_integer('pretrained_epoch', -1, 'Checkpoint suffix to load; -1 = best eval epoch or latest.')
-flags.DEFINE_integer('actor_spi_steps', 100000, 'Number of actor SPI gradient steps.')
+flags.DEFINE_integer('actor_spi_steps', 50000, 'Number of actor SPI gradient steps.')
 flags.DEFINE_float('actor_spi_lr', 3e-4, 'Adam learning rate for actor SPI finetuning.')
 flags.DEFINE_float('spi_tau', -1.0, 'Override actor SPI tau; < 0 keeps the checkpoint value.')
 flags.DEFINE_integer('actor_spi_batch_size', 0, 'Batch size; 0 = use checkpoint batch_size.')

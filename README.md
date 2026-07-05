@@ -1,111 +1,157 @@
 # PathBridger
 
-PathBridger is an offline, long-horizon, goal-conditioned RL method for [OGBench](https://github.com/seohongpark/ogbench).
-It couples a **flow-based subgoal model**, a **forward-bridge residual dynamics planner**, a **transitive
-RL (TRL) critic**, and an **SPI actor** into a single training loop.
+PathBridger is a production-oriented implementation of an offline, long-horizon,
+goal-conditioned reinforcement learning pipeline for OGBench tasks. It combines a
+flow-based subgoal model, forward-bridge residual dynamics, a transitive RL critic,
+and an actor-SPI finetuning stage for reliable checkpoint evaluation and deployment.
+
+The repository is intentionally slim: environment configs, training/evaluation entry
+points, model definitions, and runtime utilities are kept; ablation-only manifests and
+qualitative plotting/video rollout tools are excluded from the default tree.
 
 ## Overview
 
-At each training step the components are updated jointly:
+PathBridger uses a two-stage workflow:
 
-1. A `DynamicsAgent` samples a flow subgoal endpoint from the current state and the final goal.
-2. A `forward_bridge_residual` planner rolls out a state trajectory from the current state to the subgoal.
-3. An inverse dynamics model (IDM) turns the trajectory prefix into action-chunk proposals.
-4. The **TRL critic** learns an action-chunk Q value together with a transitive state-pair value.
-5. The **SPI actor** is updated to follow the critic-ranked action-chunk proposals.
+1. **IDM / dynamics / critic training.** `main.py` trains the flow subgoal model,
+   bridge dynamics, inverse dynamics model (IDM), and TRL critic. The standard
+   deployment baseline uses 1M gradient steps unless a different `--train_steps` is
+   specified.
+2. **Actor-SPI finetuning.** `train_actor_spi.py` freezes the trained dynamics/IDM
+   and critic, then finetunes only the deterministic SPI actor. The default actor
+   finetuning horizon is 50K gradient steps.
 
-At evaluation time, planning is closed-loop: the agent replans action chunks and steps the environment
-until it reaches the environment's maximum episode length (the OGBench `TimeLimit`).
+At evaluation time, the runtime restores a saved run, rebuilds the matching OGBench
+environment from the saved metadata, replans action chunks in closed loop, and records
+success metrics under the run directory.
 
 ## Installation
 
-PathBridger requires Python 3.9+ and is based on JAX. The main dependencies are `jax >= 0.4.26`,
-`flax >= 0.8.4`, and `ogbench`. Install everything with:
+PathBridger requires Python 3.9+ and is based on JAX, Flax, and OGBench.
+Install the minimal runtime dependencies with:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-To render rollouts with MuJoCo, set `MUJOCO_GL=egl` (headless) or `MUJOCO_GL=glfw`.
-
-## Usage
-
-Training is driven by a single YAML run config passed to `main.py`:
+or install the project package directly:
 
 ```bash
-# Train on OGBench antmaze-medium-navigate (the default config)
-python main.py --run_config=config/antmaze-medium-navigate.yaml
+pip install .
 ```
 
-Each config sets the environment name, planning horizon, dynamics/critic/actor blocks, and evaluation
-schedule. Structural constants and fixed hyperparameters are hardcoded in the agents, so the configs only
-carry the environment-varying knobs (e.g. `discount`, `value_distance_weight_power`, goal sampling, subgoal
-gap/weight).
-
-## Reproducing the main results
-
-The `config/` directory ships one best config per environment (matching the 1M-step best runs):
+Optional experiment and visualization dependencies are opt-in:
 
 ```bash
-python main.py --run_config=config/antmaze-medium-navigate.yaml
-python main.py --run_config=config/antmaze-large-navigate.yaml
-python main.py --run_config=config/antmaze-giant-navigate.yaml
-python main.py --run_config=config/cube-single-play.yaml
-python main.py --run_config=config/cube-double-play.yaml
-python main.py --run_config=config/cube-triple-play.yaml
-python main.py --run_config=config/puzzle-3x3-play.yaml
-python main.py --run_config=config/puzzle-4x4-play.yaml
+pip install '.[experiment]'      # Weights & Biases logging
+pip install '.[visualization]'   # Matplotlib / MoviePy / Pillow tooling
 ```
 
-Ablations for the `cube-double` best config (dedup path loss, no subgoal/dynamics time embedding) live in
-`config/ablation_cd_1m_best/`.
+For MuJoCo rendering on a headless machine, set `MUJOCO_GL=egl` before running
+evaluation.
 
-## Actor SPI finetuning
+## Quick start
 
-`train_actor_spi.py` freezes the dynamics/IDM/critic of an existing run and finetunes only the deterministic
-SPI actor:
+### 1. Train IDM / dynamics / critic
+
+Use one of the environment configs in `config/` and train for the default production
+horizon of 1M gradient steps, or pass your own step budget:
 
 ```bash
-python train_actor_spi.py --pretrained_ckpt_dir=runs/<run_dir> --actor_spi_steps=100000
+python main.py \
+  --run_config=config/antmaze-medium-navigate.yaml \
+  --train_steps=1000000 \
+  --use_wandb=False
 ```
 
-Actor SPI defaults can be provided via `--actor_spi_config=config/actor_spi/actor_spi_default.yaml`
-(command-line flags take precedence).
+Training writes checkpoints, `flags.json`, logs, and evaluation outputs under
+`runs/<run_dir>/`.
 
-## Evaluating a checkpoint
+### 2. Finetune the SPI actor
 
-`eval_checkpoint.py` reloads a training run and reruns the same environment evaluation as training. It rolls
-out to the environment's max episode length by default:
+After the IDM/dynamics/critic checkpoint is available, finetune the actor for 50K
+steps:
 
 ```bash
-MUJOCO_GL=egl python eval_checkpoint.py --run_dir=runs/<run_dir> --epoch=1000
+python train_actor_spi.py \
+  --pretrained_ckpt_dir=runs/<run_dir> \
+  --actor_spi_steps=50000 \
+  --actor_spi_config=config/actor_spi/actor_spi_default.yaml
 ```
 
-## Rollout and visualization
+The actor finetuning script keeps non-actor components frozen and stores actor-SPI
+outputs under `checkpoints/actor_spi/` by default.
 
-The `rollout/` package provides a unified launcher for qualitative rollouts (IDM, actor, and maze-only
-state-space subgoal plots):
+### 3. Evaluate a checkpoint
+
+Evaluate an IDM-only checkpoint before actor finetuning:
 
 ```bash
-PYTHONPATH=. python -m rollout.run --run_dir=runs/<run_dir> --mode all --task_ids=1,2,3
+MUJOCO_GL=egl python eval_checkpoint.py \
+  --run_dir=runs/<run_dir> \
+  --epoch=1000000 \
+  --idm_only
 ```
+
+Evaluate a run with an actor checkpoint by omitting `--idm_only`:
+
+```bash
+MUJOCO_GL=egl python eval_checkpoint.py \
+  --run_dir=runs/<run_dir> \
+  --epoch=1000000
+```
+
+Evaluation results are saved as JSON and appended to `eval_results/all.csv` inside
+the run directory.
+
+## Configs
+
+The repository keeps one canonical config per supported OGBench environment plus the
+actor-SPI finetuning default:
+
+| Config | Environment |
+|--------|-------------|
+| `config/antmaze-medium-navigate.yaml` | `antmaze-medium-navigate-v0` |
+| `config/antmaze-large-navigate.yaml` | `antmaze-large-navigate-v0` |
+| `config/antmaze-giant-navigate.yaml` | `antmaze-giant-navigate-v0` |
+| `config/cube-single-play.yaml` | `cube-single-play-v0` |
+| `config/cube-double-play.yaml` | `cube-double-play-v0` |
+| `config/cube-triple-play.yaml` | `cube-triple-play-v0` |
+| `config/puzzle-3x3-play.yaml` | `puzzle-3x3-play-v0` |
+| `config/puzzle-4x4-play.yaml` | `puzzle-4x4-play-v0` |
+| `config/actor_spi/actor_spi_default.yaml` | Actor-only SPI finetuning defaults |
+
+A config sets the environment name, horizon, evaluation cadence, and environment-
+specific dynamics/critic/actor hyperparameters. Command-line flags take precedence
+where supported.
 
 ## Repository layout
 
-| Path | Role |
-|------|------|
-| `main.py` | Training entry point; jointly trains dynamics, TRL critic, and SPI actor. |
-| `train_actor_spi.py` | Actor-only SPI finetuning from an existing checkpoint. |
-| `eval_checkpoint.py` | Reruns environment evaluation from a saved checkpoint. |
-| `agents/` | `dynamics.py` (flow subgoal + bridge planner + IDM), `critic.py` (TRL critic), `actor.py` (SPI actor). |
-| `utils/` | Datasets, networks, env setup, flax/checkpoint utilities, evaluation helpers. |
-| `rollout/` | Qualitative rollout and visualization tools. |
-| `config/` | One best run config per environment, plus ablations and the actor-SPI default. |
+| Path | Purpose |
+|------|---------|
+| `main.py` | IDM, dynamics, critic, and optional joint actor training entry point. |
+| `train_actor_spi.py` | Actor-only SPI finetuning entry point used in the default deployment workflow. |
+| `eval_checkpoint.py` | Checkpoint evaluation entry point. |
+| `agents/` | Model and agent definitions for dynamics, critic, and actor components. |
+| `utils/` | Dataset, checkpoint, eval-result I/O, logging, and model utility code required at runtime. |
+| `rollout/` | Minimal rollout primitives needed by evaluation and MuJoCo setup. |
+| `config/` | Environment configs and actor-SPI defaults. |
+
+## Notes for deployment
+
+- Keep `--train_actor_spi=False` during the IDM/dynamics/critic stage unless you
+  intentionally want legacy joint actor training.
+- Use `train_actor_spi.py` for the supported actor-only finetuning stage.
+- Use `--idm_only` when evaluating checkpoints that do not contain a trained actor.
+- W&B, Matplotlib, MoviePy, and Pillow are not required for the base runtime.
+- Ablation configs and qualitative video/plotting launchers are intentionally omitted
+  from this production tree.
 
 ## Acknowledgments
 
-This codebase builds on [OGBench](https://github.com/seohongpark/ogbench) and is structured after
-[Flow Q-Learning (FQL)](https://github.com/seohongpark/fql).
+This implementation builds on OGBench and follows the clean JAX project structure used
+by the FQL codebase. See the FQL repository for the reference project style and related
+flow-based RL implementation: https://github.com/seohongpark/fql.
 
 ## License
 
