@@ -30,14 +30,13 @@ from agents.critic import (
 )
 from agents.actor import ActorAgent, get_actor_config
 from agents.dynamics import DynamicsAgent, get_dynamics_config
-from utils.datasets import Dataset, PathHGCDataset
-from utils.critic_sequence_dataset import CriticSequenceDataset
+from utils.datasets import CriticSequenceDataset, Dataset, PathHGCDataset
 from utils.env_utils import make_env_and_datasets
 from utils.flax_utils import restore_agent, save_agent
 from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, setup_wandb
-from utils.ogbench_eval_rollout import rollout_chunked_eval_episode
+from rollout.eval import rollout_chunked_eval_episode
 from utils.run_io import eval_result_path, parse_int_list, save_eval_results
-from utils.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
+from agents.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
 
 FLAGS = flags.FLAGS
 _DEFAULT_HORIZON = 25
@@ -148,7 +147,7 @@ flags.DEFINE_integer(
 flags.DEFINE_string(
     'eval_task_ids',
     '1,2,3,4,5',
-    'Comma-separated OGBench task ids for env eval (also written to flags.json for eval_checkpoint.py).',
+    'Comma-separated OGBench task ids for env eval (also written to flags.json for scripts/eval_checkpoint.py).',
 )
 flags.DEFINE_integer('eval_episodes_per_task', 10, 'Number of env evaluation episodes to run for each task id.')
 flags.DEFINE_integer(
@@ -178,7 +177,7 @@ flags.DEFINE_boolean(
     False,
     'If True, train the SPI actor jointly with dynamics/critic (legacy behavior). '
     'Default False: skip actor proposal build/rescore/update/checkpoint during the main run; '
-    'deployment workflow keeps this false for IDM training, then runs train_actor_spi.py for 50K actor finetuning.',
+    'deployment workflow keeps this false for IDM training, then runs scripts/train_actor_spi.py for 50K actor finetuning.',
 )
 
 _SPI_ACTOR_KEYS = {

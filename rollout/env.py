@@ -48,7 +48,7 @@ _MANIP_RIGHT_DRIVER_LIMIT = 0.8
 
 
 def is_manipspace_env(env) -> bool:
-    """Heuristic: True for OGBench manipspace envs (cube/scene/puzzle) that emit compact obs."""
+    """Heuristic: True for OGBench ManipSpace envs that emit compact obs."""
     u = getattr(env, 'unwrapped', env)
     return (
         hasattr(u, 'compute_ob_info')

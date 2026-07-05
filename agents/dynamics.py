@@ -19,11 +19,11 @@ import optax
 
 from agents.critic import ScalarValueNet
 from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from utils.dynamics import (
+from agents.dynamics_schedule import (
     forward_bridge_coefficients,
     make_dynamics_schedule,
 )
-from utils.goal_representation import assert_phi_goal_obs_indices, goal_representation, normalize_phi_goal_obs_indices
+from agents.goal_representation import assert_phi_goal_obs_indices, goal_representation, normalize_phi_goal_obs_indices
 from utils.networks import MLP
 
 

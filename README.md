@@ -17,7 +17,7 @@ PathBridger uses a two-stage workflow:
    bridge dynamics, inverse dynamics model (IDM), and TRL critic. The standard
    deployment baseline uses 1M gradient steps unless a different `--train_steps` is
    specified.
-2. **Actor-SPI finetuning.** `train_actor_spi.py` freezes the trained dynamics/IDM
+2. **Actor-SPI finetuning.** `scripts/train_actor_spi.py` freezes the trained dynamics/IDM
    and critic, then finetunes only the deterministic SPI actor. The default actor
    finetuning horizon is 50K gradient steps.
 
@@ -73,7 +73,7 @@ After the IDM/dynamics/critic checkpoint is available, finetune the actor for 50
 steps:
 
 ```bash
-python train_actor_spi.py \
+python scripts/train_actor_spi.py \
   --pretrained_ckpt_dir=runs/<run_dir> \
   --actor_spi_steps=50000 \
   --actor_spi_config=config/actor_spi/actor_spi_default.yaml
@@ -87,7 +87,7 @@ outputs under `checkpoints/actor_spi/` by default.
 Evaluate an IDM-only checkpoint before actor finetuning:
 
 ```bash
-MUJOCO_GL=egl python eval_checkpoint.py \
+MUJOCO_GL=egl python scripts/eval_checkpoint.py \
   --run_dir=runs/<run_dir> \
   --epoch=1000000 \
   --idm_only
@@ -96,7 +96,7 @@ MUJOCO_GL=egl python eval_checkpoint.py \
 Evaluate a run with an actor checkpoint by omitting `--idm_only`:
 
 ```bash
-MUJOCO_GL=egl python eval_checkpoint.py \
+MUJOCO_GL=egl python scripts/eval_checkpoint.py \
   --run_dir=runs/<run_dir> \
   --epoch=1000000
 ```
@@ -132,8 +132,8 @@ where supported.
 | Path | Purpose |
 |------|---------|
 | `main.py` | IDM, dynamics, critic, and optional joint actor training entry point. |
-| `train_actor_spi.py` | Actor-only SPI finetuning entry point used in the default deployment workflow. |
-| `eval_checkpoint.py` | Checkpoint evaluation entry point. |
+| `scripts/train_actor_spi.py` | Actor-only SPI finetuning entry point used in the default deployment workflow. |
+| `scripts/eval_checkpoint.py` | Checkpoint evaluation entry point. |
 | `agents/` | Model and agent definitions for dynamics, critic, and actor components. |
 | `utils/` | Dataset, checkpoint, eval-result I/O, logging, and model utility code required at runtime. |
 | `rollout/` | Minimal rollout primitives needed by evaluation and MuJoCo setup. |
@@ -143,7 +143,7 @@ where supported.
 
 - Keep `--train_actor_spi=False` during the IDM/dynamics/critic stage unless you
   intentionally want legacy joint actor training.
-- Use `train_actor_spi.py` for the supported actor-only finetuning stage.
+- Use `scripts/train_actor_spi.py` for the supported actor-only finetuning stage.
 - Use `--idm_only` when evaluating checkpoints that do not contain a trained actor.
 - W&B, Matplotlib, MoviePy, and Pillow are not required for the base runtime.
 - The dynamics path objective trains the bridge path once over the supervised

@@ -5,7 +5,7 @@ Reads ``flags.json`` + ``checkpoints/{dynamics,critic,actor}/params_<epoch>.pkl`
 
 Example::
 
-    MUJOCO_GL=egl python eval_checkpoint.py \\
+    MUJOCO_GL=egl python scripts/eval_checkpoint.py \\
         --run_dir=runs/20260422_015908_seed0_antmaze-medium-navigate-v0 \\
         --epoch=1000
 
@@ -18,8 +18,13 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+_REPO = Path(__file__).resolve().parents[1]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
 
 import jax.numpy as jnp
 import numpy as np
@@ -38,7 +43,7 @@ from main import (
     _update_config,
 )
 from utils.datasets import Dataset, PathHGCDataset
-from utils.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
+from agents.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
 from utils.env_utils import make_env_and_datasets
 from utils.run_io import (
     eval_result_path,
@@ -112,7 +117,7 @@ def main() -> None:
         '--idm_only',
         action='store_true',
         help='Evaluate only the IDM policy (flow subgoal + inverse dynamics); skip loading and '
-        'rolling out the SPI actor. Use before the 50K train_actor_spi.py finetuning stage.',
+        'rolling out the SPI actor. Use before the 50K scripts/train_actor_spi.py finetuning stage.',
     )
     args = p.parse_args()
 

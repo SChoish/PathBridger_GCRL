@@ -17,7 +17,7 @@ import numpy as np
 import optax
 
 from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from utils.goal_representation import assert_phi_goal_obs_indices, goal_representation, normalize_phi_goal_obs_indices
+from agents.goal_representation import assert_phi_goal_obs_indices, goal_representation, normalize_phi_goal_obs_indices
 from utils.networks import MLP
 
 

@@ -15,6 +15,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+_REPO = Path(__file__).resolve().parents[1]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -25,7 +29,7 @@ from absl import app, flags
 
 # Import main first so its flags and helper functions are registered.
 import main as M  # noqa: F401
-from eval_checkpoint import _build_configs
+from scripts.eval_checkpoint import _build_configs
 from main import (
     FLAGS,
     _build_actor_batch_from_dynamics,
@@ -44,7 +48,7 @@ from utils.datasets import Dataset, PathHGCDataset
 from utils.env_utils import make_env_and_datasets
 from utils.flax_utils import TrainState, restore_agent, save_agent
 from utils.freeze_check import assert_frozen, assert_trained, summarize_param_diff
-from utils.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
+from agents.goal_representation import infer_phi_goal_obs_indices, normalize_phi_goal_obs_indices
 from utils.log_utils import CsvLogger
 from utils.run_io import (
     list_checkpoint_suffixes,
@@ -54,9 +58,6 @@ from utils.run_io import (
     resolve_dynamics_checkpoint_dir,
     save_eval_results,
 )
-
-
-_REPO = Path(__file__).resolve().parent
 
 flags.DEFINE_string('pretrained_ckpt_dir', '', 'Pretrained run dir. Empty -> select runs/ best-IDM eval.')
 flags.DEFINE_integer('pretrained_epoch', -1, 'Checkpoint suffix to load; -1 = best eval epoch or latest.')
